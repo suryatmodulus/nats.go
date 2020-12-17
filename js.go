@@ -165,10 +165,27 @@ func (opt jsOptFn) configureJSContext(opts *js) error {
 // APIPrefix changes the default prefix used for the JetStream API.
 func APIPrefix(pre string) JSOpt {
 	return jsOptFn(func(js *js) error {
-		js.pre = pre
-		if !strings.HasSuffix(js.pre, ".") {
-			js.pre = js.pre + "."
+		pre = strings.TrimSuffix(pre, ".")
+
+		if pre == ">" {
+			return ErrJetStreamBadPre
 		}
+
+		toks := strings.Split(pre, ".")
+		for i, tok := range toks {
+			if tok == "" || tok == "*" {
+				return ErrJetStreamBadPre
+			}
+
+			if tok == ">" && i < len(toks)-1 {
+				return ErrBadSubject
+			} else if tok == ">" && i == len(toks)-1 {
+				js.pre = pre
+				return nil
+			}
+		}
+
+		js.pre = fmt.Sprintf("%s.", pre)
 		return nil
 	})
 }
