@@ -251,24 +251,15 @@ func TestJetStreamSubscribe(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	expectConsumers := func(t *testing.T, expected int) []*nats.ConsumerInfo {
+	expectConsumers := func(t *testing.T, expected int) {
 		t.Helper()
-		cl := js.NewConsumerLister("TEST")
-		if !cl.Next() {
-			if err := cl.Err(); err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			t.Fatalf("Unexpected consumer lister next")
+		var count int
+		for range js.ConsumersInfo("TEST") {
+			count++
 		}
-		p := cl.Page()
-		if len(p) != expected {
-			t.Fatalf("Expected %d consumers, got: %d", expected, len(p))
+		if count != expected {
+			t.Fatalf("Expected %d consumers, got: %d", expected, count)
 		}
-		if err := cl.Err(); err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
-
-		return p
 	}
 
 	// Create the stream using our client API.
@@ -1105,56 +1096,45 @@ func TestJetStreamManagement(t *testing.T) {
 		}
 	})
 
-	t.Run("list streams", func(t *testing.T) {
-		sl := js.NewStreamLister()
-		if !sl.Next() {
-			if err := sl.Err(); err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			t.Fatalf("Unexpected stream lister next")
-		}
-		if p := sl.Page(); len(p) != 1 || p[0].Config.Name != "foo" {
-			t.Fatalf("StreamInfo is not correct %+v", p)
-		}
-		if err := sl.Err(); err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-
-	t.Run("list consumers", func(t *testing.T) {
-		if cl := js.NewConsumerLister(""); cl.Next() {
-			t.Fatalf("Unexpected next ok")
-		} else if err := cl.Err(); err == nil {
-			if cl.Next() {
-				t.Fatalf("Unexpected next ok")
-			}
-			t.Fatalf("Unexpected nil error")
-		}
-
-		cl := js.NewConsumerLister("foo")
-		if !cl.Next() {
-			if err := cl.Err(); err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			t.Fatalf("Unexpected consumer lister next")
-		}
-		if p := cl.Page(); len(p) != 1 || p[0].Stream != "foo" || p[0].Config.Durable != "dlc" {
-			t.Fatalf("ConsumerInfo is not correct %+v", p)
-		}
-		if err := cl.Err(); err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
-	})
-
 	t.Run("list consumer names", func(t *testing.T) {
 		var names []string
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		for name := range js.ConsumerNames(ctx, "foo") {
+		for name := range js.ConsumerNames("foo") {
 			names = append(names, name)
 		}
 		if got, want := len(names), 1; got != want {
 			t.Fatalf("Unexpected names, got=%d, want=%d", got, want)
+		}
+	})
+
+	t.Run("streams info", func(t *testing.T) {
+		var i int
+		expected := "foo"
+		for stream := range js.StreamsInfo(nats.MaxWait(3 * time.Second)) {
+			i++
+
+			got := stream.Config.Name
+			if got != expected {
+				t.Fatalf("Expected stream to be %v, got: %v", expected, got)
+			}
+		}
+		if i != 1 {
+			t.Errorf("Expected single stream: %v", err)
+		}
+	})
+
+	t.Run("consumers info", func(t *testing.T) {
+		var called bool
+		for range js.ConsumersInfo("") {
+			called = true
+		}
+		if called {
+			t.Error("Expected not not receive entries")
+		}
+
+		for ci := range js.ConsumersInfo("foo") {
+			if ci.Stream != "foo" || ci.Config.Durable != "dlc" {
+				t.Fatalf("ConsumerInfo is not correct %+v", ci)
+			}
 		}
 	})
 
@@ -1180,9 +1160,7 @@ func TestJetStreamManagement(t *testing.T) {
 
 	t.Run("list stream names", func(t *testing.T) {
 		var names []string
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		for name := range js.StreamNames(ctx) {
+		for name := range js.StreamNames() {
 			names = append(names, name)
 		}
 		if got, want := len(names), 1; got != want {
@@ -2568,24 +2546,16 @@ func TestJetStream_Unsubscribe(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	fetchConsumers := func(t *testing.T, expected int) []*nats.ConsumerInfo {
+	fetchConsumers := func(t *testing.T, expected int) {
 		t.Helper()
-		cl := js.NewConsumerLister("foo")
-		if !cl.Next() {
-			if err := cl.Err(); err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			t.Fatalf("Unexpected consumer lister next")
-		}
-		p := cl.Page()
-		if len(p) != expected {
-			t.Fatalf("Expected %d consumers, got: %d", expected, len(p))
-		}
-		if err := cl.Err(); err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
 
-		return p
+		var i int
+		for range js.ConsumersInfo("foo") {
+			i++
+		}
+		if i != expected {
+			t.Fatalf("Expected %d consumers, got: %d", expected, i)
+		}
 	}
 
 	js.Publish("foo.A", []byte("A"))
@@ -2706,24 +2676,18 @@ func TestJetStream_UnsubscribeCloseDrain(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	fetchConsumers := func(t *testing.T, expected int) []*nats.ConsumerInfo {
+	fetchConsumers := func(t *testing.T, expected int) {
 		t.Helper()
-		cl := jsm.NewConsumerLister("foo")
-		if !cl.Next() {
-			if err := cl.Err(); err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			t.Fatalf("Unexpected consumer lister next")
-		}
-		p := cl.Page()
-		if len(p) != expected {
-			t.Fatalf("Expected %d consumers, got: %d", expected, len(p))
-		}
-		if err := cl.Err(); err != nil {
-			t.Errorf("Unexpected error: %v", err)
-		}
 
-		return p
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var i int
+		for range jsm.ConsumersInfo("foo", nats.Context(ctx)) {
+			i++
+		}
+		if i != expected {
+			t.Fatalf("Expected %d consumers, got: %d", expected, i)
+		}
 	}
 
 	t.Run("conn drain deletes ephemeral consumers", func(t *testing.T) {
@@ -3074,7 +3038,10 @@ func withJSClusterAndStream(t *testing.T, clusterName string, size int, stream *
 		timeout := time.Now().Add(10 * time.Second)
 		for time.Now().Before(timeout) {
 			_, err = jsm.AddStream(stream)
-			if err != nil {
+			if err != nil && err.Error() == "stream name already in use" {
+				// Great, the stream was created.
+				break
+			} else if err != nil {
 				t.Logf("WARN: Got error while trying to create stream: %v", err)
 				// Backoff for a bit until cluster and resources ready.
 				time.Sleep(500 * time.Millisecond)
