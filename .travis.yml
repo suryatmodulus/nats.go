@@ -1,5 +1,6 @@
 language: go
 go:
+- 1.16.x
 - 1.15.x
 - 1.14.x
 go_import_path: github.com/nats-io/nats.go
