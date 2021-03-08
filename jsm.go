@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -479,6 +480,16 @@ type streamCreateResponse struct {
 }
 
 func (js *js) AddStream(cfg *StreamConfig, opts ...JSMOpt) (*StreamInfo, error) {
+	o, err := js.getJSMOptsStruct(opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if o.ctxCancel != nil {
+			o.ctxCancel()
+		}
+	}()
+
 	if cfg == nil || cfg.Name == _EMPTY_ {
 		return nil, ErrStreamNameRequired
 	}
@@ -489,18 +500,27 @@ func (js *js) AddStream(cfg *StreamConfig, opts ...JSMOpt) (*StreamInfo, error) 
 	}
 
 	csSubj := js.apiSubj(fmt.Sprintf(apiStreamCreateT, cfg.Name))
-	r, err := js.nc.Request(csSubj, req, js.wait)
-	if err != nil {
-		return nil, err
+	var ret *StreamInfo
+	var m *Msg
+	for i := 0; i < o.maxTries; i++ {
+		m, err = js.nc.RequestWithContext(o.ctx, csSubj, req)
+		if err != nil {
+			continue
+		}
+
+		var resp streamCreateResponse
+		if err = json.Unmarshal(m.Data, &resp); err != nil {
+			continue
+		}
+		if resp.Error != nil {
+			err = errors.New(resp.Error.Description)
+			continue
+		}
+
+		ret = resp.StreamInfo
+		break
 	}
-	var resp streamCreateResponse
-	if err := json.Unmarshal(r.Data, &resp); err != nil {
-		return nil, err
-	}
-	if resp.Error != nil {
-		return nil, errors.New(resp.Error.Description)
-	}
-	return resp.StreamInfo, nil
+	return ret, err
 }
 
 type streamInfoResponse = streamCreateResponse
@@ -955,7 +975,8 @@ func (js *js) getJSMOptsStruct(opts ...JSMOpt) (jsmOpts, error) {
 	if o.ctx == nil && o.ttl > 0 {
 		o.ctx, o.ctxCancel = context.WithTimeout(context.Background(), o.ttl)
 	}
-	o.maxRetries++
+	// 1 normal try plus the number of retries.
+	o.maxTries++
 
 	return o, nil
 }

@@ -156,10 +156,10 @@ type JSMOpt interface {
 }
 
 type jsmOpts struct {
-	ctx        context.Context
-	ctxCancel  context.CancelFunc
-	ttl        time.Duration
-	maxRetries uint
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+	ttl       time.Duration
+	maxTries  int
 }
 
 // JSOpt configures a JetStream context.
@@ -393,7 +393,7 @@ func Context(ctx context.Context) ContextOpt {
 type MaxRetries uint
 
 func (n MaxRetries) configureJSManager(opts *jsmOpts) error {
-	opts.maxRetries = uint(n)
+	opts.maxTries = int(n)
 	return nil
 }
 

@@ -106,7 +106,7 @@ func TestJetStreamPublish(t *testing.T) {
 	si, err := js.AddStream(&nats.StreamConfig{
 		Name:     "TEST",
 		Subjects: []string{"test", "foo", "bar"},
-	})
+	}, nats.MaxRetries(3))
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
