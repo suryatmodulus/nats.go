@@ -26,19 +26,19 @@ import (
 // JetStreamManager is the public interface for managing JetStream streams & consumers.
 type JetStreamManager interface {
 	// AddStream creates a stream.
-	AddStream(cfg *StreamConfig) (*StreamInfo, error)
+	AddStream(cfg *StreamConfig, opts ...JSMOpt) (*StreamInfo, error)
 
 	// UpdateStream updates a stream.
-	UpdateStream(cfg *StreamConfig) (*StreamInfo, error)
+	UpdateStream(cfg *StreamConfig, opts ...JSMOpt) (*StreamInfo, error)
 
 	// DeleteStream deletes a stream.
-	DeleteStream(name string) error
+	DeleteStream(name string, opts ...JSMOpt) error
 
 	// StreamInfo retrieves information from a stream.
-	StreamInfo(stream string) (*StreamInfo, error)
+	StreamInfo(stream string, opts ...JSMOpt) (*StreamInfo, error)
 
 	// PurgeStream purges a stream messages.
-	PurgeStream(name string) error
+	PurgeStream(name string, opts ...JSMOpt) error
 
 	// StreamsInfo can be used to retrieve a list of StreamInfo objects.
 	StreamsInfo(opts ...JSMOpt) <-chan *StreamInfo
@@ -47,19 +47,19 @@ type JetStreamManager interface {
 	StreamNames(opts ...JSMOpt) <-chan string
 
 	// GetMsg retrieves a raw stream message stored in JetStream by sequence number.
-	GetMsg(name string, seq uint64) (*RawStreamMsg, error)
+	GetMsg(name string, seq uint64, opts ...JSMOpt) (*RawStreamMsg, error)
 
 	// DeleteMsg erases a message from a stream.
-	DeleteMsg(name string, seq uint64) error
+	DeleteMsg(name string, seq uint64, opts ...JSMOpt) error
 
 	// AddConsumer adds a consumer to a stream.
-	AddConsumer(stream string, cfg *ConsumerConfig) (*ConsumerInfo, error)
+	AddConsumer(stream string, cfg *ConsumerConfig, opts ...JSMOpt) (*ConsumerInfo, error)
 
 	// DeleteConsumer deletes a consumer.
-	DeleteConsumer(stream, consumer string) error
+	DeleteConsumer(stream, consumer string, opts ...JSMOpt) error
 
 	// ConsumerInfo retrieves information of a consumer from a stream.
-	ConsumerInfo(stream, name string) (*ConsumerInfo, error)
+	ConsumerInfo(stream, name string, opts ...JSMOpt) (*ConsumerInfo, error)
 
 	// ConsumersInfo is used to retrieve a list of ConsumerInfo objects.
 	ConsumersInfo(stream string, opts ...JSMOpt) <-chan *ConsumerInfo
@@ -68,7 +68,7 @@ type JetStreamManager interface {
 	ConsumerNames(stream string, opts ...JSMOpt) <-chan string
 
 	// AccountInfo retrieves info about the JetStream usage from an account.
-	AccountInfo() (*AccountInfo, error)
+	AccountInfo(opts ...JSMOpt) (*AccountInfo, error)
 }
 
 // StreamConfig will determine the properties for a stream.
@@ -171,7 +171,7 @@ type accountInfoResponse struct {
 }
 
 // AccountInfo retrieves info about the JetStream usage from the current account.
-func (js *js) AccountInfo() (*AccountInfo, error) {
+func (js *js) AccountInfo(opts ...JSMOpt) (*AccountInfo, error) {
 	resp, err := js.nc.Request(js.apiSubj(apiAccountInfo), nil, js.wait)
 	if err != nil {
 		return nil, err
@@ -204,7 +204,7 @@ type consumerResponse struct {
 }
 
 // AddConsumer will add a JetStream consumer.
-func (js *js) AddConsumer(stream string, cfg *ConsumerConfig) (*ConsumerInfo, error) {
+func (js *js) AddConsumer(stream string, cfg *ConsumerConfig, opts ...JSMOpt) (*ConsumerInfo, error) {
 	if stream == _EMPTY_ {
 		return nil, ErrStreamNameRequired
 	}
@@ -248,7 +248,7 @@ type consumerDeleteResponse struct {
 }
 
 // DeleteConsumer deletes a Consumer.
-func (js *js) DeleteConsumer(stream, consumer string) error {
+func (js *js) DeleteConsumer(stream, consumer string, opts ...JSMOpt) error {
 	if stream == _EMPTY_ {
 		return ErrStreamNameRequired
 	}
@@ -269,7 +269,7 @@ func (js *js) DeleteConsumer(stream, consumer string) error {
 }
 
 // ConsumerInfo returns information about a Consumer.
-func (js *js) ConsumerInfo(stream, consumer string) (*ConsumerInfo, error) {
+func (js *js) ConsumerInfo(stream, consumer string, opts ...JSMOpt) (*ConsumerInfo, error) {
 	return js.getConsumerInfo(stream, consumer)
 }
 
@@ -287,32 +287,17 @@ type consumerLister struct {
 
 // ConsumersInfo returns a receive only channel to iterate on the consumers info.
 func (js *js) ConsumersInfo(stream string, opts ...JSMOpt) <-chan *ConsumerInfo {
-	var o jsmOpts
-	if len(opts) > 0 {
-		for _, opt := range opts {
-			if err := opt.configureJSManager(&o); err != nil {
-				return nil
-			}
-		}
-	}
-	// Check for option collisions. Right now just timeout and context.
-	if o.ctx != nil && o.ttl != 0 {
+	o, err := js.getJSMOptsStruct(opts...)
+	if err != nil {
 		return nil
-	}
-	if o.ttl == 0 && o.ctx == nil {
-		o.ttl = js.wait
-	}
-	var cancel context.CancelFunc
-	if o.ctx == nil && o.ttl > 0 {
-		o.ctx, cancel = context.WithTimeout(context.Background(), o.ttl)
 	}
 
 	ach := make(chan *ConsumerInfo)
 	cl := &consumerLister{stream: stream, js: js}
 	go func() {
 		defer func() {
-			if cancel != nil {
-				cancel()
+			if o.ctxCancel != nil {
+				o.ctxCancel()
 			}
 		}()
 		defer close(ach)
@@ -458,32 +443,17 @@ func (c *consumerNamesLister) Err() error {
 
 // ConsumerNames is used to retrieve a list of Consumer names.
 func (js *js) ConsumerNames(stream string, opts ...JSMOpt) <-chan string {
-	var o jsmOpts
-	if len(opts) > 0 {
-		for _, opt := range opts {
-			if err := opt.configureJSManager(&o); err != nil {
-				return nil
-			}
-		}
-	}
-	// Check for option collisions. Right now just timeout and context.
-	if o.ctx != nil && o.ttl != 0 {
+	o, err := js.getJSMOptsStruct(opts...)
+	if err != nil {
 		return nil
-	}
-	if o.ttl == 0 && o.ctx == nil {
-		o.ttl = js.wait
-	}
-	var cancel context.CancelFunc
-	if o.ctx == nil && o.ttl > 0 {
-		o.ctx, cancel = context.WithTimeout(context.Background(), o.ttl)
 	}
 
 	ch := make(chan string)
 	l := &consumerNamesLister{stream: stream, js: js}
 	go func() {
 		defer func() {
-			if cancel != nil {
-				cancel()
+			if o.ctxCancel != nil {
+				o.ctxCancel()
 			}
 		}()
 		defer close(ch)
@@ -508,7 +478,7 @@ type streamCreateResponse struct {
 	*StreamInfo
 }
 
-func (js *js) AddStream(cfg *StreamConfig) (*StreamInfo, error) {
+func (js *js) AddStream(cfg *StreamConfig, opts ...JSMOpt) (*StreamInfo, error) {
 	if cfg == nil || cfg.Name == _EMPTY_ {
 		return nil, ErrStreamNameRequired
 	}
@@ -535,7 +505,7 @@ func (js *js) AddStream(cfg *StreamConfig) (*StreamInfo, error) {
 
 type streamInfoResponse = streamCreateResponse
 
-func (js *js) StreamInfo(stream string) (*StreamInfo, error) {
+func (js *js) StreamInfo(stream string, opts ...JSMOpt) (*StreamInfo, error) {
 	csSubj := js.apiSubj(fmt.Sprintf(apiStreamInfoT, stream))
 	r, err := js.nc.Request(csSubj, nil, js.wait)
 	if err != nil {
@@ -598,7 +568,7 @@ type PeerInfo struct {
 }
 
 // UpdateStream updates a Stream.
-func (js *js) UpdateStream(cfg *StreamConfig) (*StreamInfo, error) {
+func (js *js) UpdateStream(cfg *StreamConfig, opts ...JSMOpt) (*StreamInfo, error) {
 	if cfg == nil || cfg.Name == _EMPTY_ {
 		return nil, ErrStreamNameRequired
 	}
@@ -630,7 +600,7 @@ type streamDeleteResponse struct {
 }
 
 // DeleteStream deletes a Stream.
-func (js *js) DeleteStream(name string) error {
+func (js *js) DeleteStream(name string, opts ...JSMOpt) error {
 	if name == _EMPTY_ {
 		return ErrStreamNameRequired
 	}
@@ -680,7 +650,7 @@ type apiMsgGetResponse struct {
 }
 
 // GetMsg retrieves a raw stream message stored in JetStream by sequence number.
-func (js *js) GetMsg(name string, seq uint64) (*RawStreamMsg, error) {
+func (js *js) GetMsg(name string, seq uint64, opts ...JSMOpt) (*RawStreamMsg, error) {
 	if name == _EMPTY_ {
 		return nil, ErrStreamNameRequired
 	}
@@ -734,7 +704,7 @@ type msgDeleteResponse struct {
 }
 
 // DeleteMsg deletes a message from a stream.
-func (js *js) DeleteMsg(name string, seq uint64) error {
+func (js *js) DeleteMsg(name string, seq uint64, opts ...JSMOpt) error {
 	if name == _EMPTY_ {
 		return ErrStreamNameRequired
 	}
@@ -766,7 +736,7 @@ type streamPurgeResponse struct {
 }
 
 // PurgeStream purges messages on a Stream.
-func (js *js) PurgeStream(name string) error {
+func (js *js) PurgeStream(name string, opts ...JSMOpt) error {
 	psSubj := js.apiSubj(fmt.Sprintf(apiStreamPurgeT, name))
 	r, err := js.nc.Request(psSubj, nil, js.wait)
 	if err != nil {
@@ -795,32 +765,17 @@ type streamLister struct {
 
 // StreamsInfo returns a receive only channel to iterate on the streams.
 func (js *js) StreamsInfo(opts ...JSMOpt) <-chan *StreamInfo {
-	var o jsmOpts
-	if len(opts) > 0 {
-		for _, opt := range opts {
-			if err := opt.configureJSManager(&o); err != nil {
-				return nil
-			}
-		}
-	}
-	// Check for option collisions. Right now just timeout and context.
-	if o.ctx != nil && o.ttl != 0 {
+	o, err := js.getJSMOptsStruct(opts...)
+	if err != nil {
 		return nil
-	}
-	if o.ttl == 0 && o.ctx == nil {
-		o.ttl = js.wait
-	}
-	var cancel context.CancelFunc
-	if o.ctx == nil && o.ttl > 0 {
-		o.ctx, cancel = context.WithTimeout(context.Background(), o.ttl)
 	}
 
 	ach := make(chan *StreamInfo)
 	sl := &streamLister{js: js}
 	go func() {
 		defer func() {
-			if cancel != nil {
-				cancel()
+			if o.ctxCancel != nil {
+				o.ctxCancel()
 			}
 		}()
 		defer close(ach)
@@ -953,32 +908,17 @@ func (l *streamNamesLister) Err() error {
 
 // StreamNames is used to retrieve a list of Stream names.
 func (js *js) StreamNames(opts ...JSMOpt) <-chan string {
-	var o jsmOpts
-	if len(opts) > 0 {
-		for _, opt := range opts {
-			if err := opt.configureJSManager(&o); err != nil {
-				return nil
-			}
-		}
-	}
-	// Check for option collisions. Right now just timeout and context.
-	if o.ctx != nil && o.ttl != 0 {
+	o, err := js.getJSMOptsStruct(opts...)
+	if err != nil {
 		return nil
-	}
-	if o.ttl == 0 && o.ctx == nil {
-		o.ttl = js.wait
-	}
-	var cancel context.CancelFunc
-	if o.ctx == nil && o.ttl > 0 {
-		o.ctx, cancel = context.WithTimeout(context.Background(), o.ttl)
 	}
 
 	ch := make(chan string)
 	l := &streamNamesLister{js: js}
 	go func() {
 		defer func() {
-			if cancel != nil {
-				cancel()
+			if o.ctxCancel != nil {
+				o.ctxCancel()
 			}
 		}()
 		defer close(ch)
@@ -994,4 +934,28 @@ func (js *js) StreamNames(opts ...JSMOpt) <-chan string {
 	}()
 
 	return ch
+}
+
+func (js *js) getJSMOptsStruct(opts ...JSMOpt) (jsmOpts, error) {
+	var o jsmOpts
+	for _, opt := range opts {
+		if err := opt.configureJSManager(&o); err != nil {
+			return jsmOpts{}, err
+		}
+	}
+
+	// Check for option collisions. Right now just timeout and context.
+	if o.ctx != nil && o.ttl != 0 {
+		return jsmOpts{}, ErrContextAndTimeout
+	}
+	if o.ttl == 0 && o.ctx == nil {
+		o.ttl = js.wait
+	}
+
+	if o.ctx == nil && o.ttl > 0 {
+		o.ctx, o.ctxCancel = context.WithTimeout(context.Background(), o.ttl)
+	}
+	o.maxRetries++
+
+	return o, nil
 }
